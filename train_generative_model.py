@@ -7,18 +7,20 @@ Usage:
 """
 import os
 os.environ["KERAS_BACKEND"] = "tensorflow"
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 import argparse
 import time
 from keras import callbacks as cbks
 import logging
 import tensorflow as tf
 import numpy as np
-
+from models.autoencoder import get_model
 from server import client_generator
 from models.utils import save_images
 mixtures = 1
-
-
+import cv2
+import matplotlib.pyplot as plt
+import glob
 def old_cleanup(data):
   X = data[0]
   if X.shape[1] == 1:
@@ -35,7 +37,7 @@ def gen(hwm, host, port):
 def train_model(name, g_train, d_train, sampler, generator, samples_per_epoch, nb_epoch,
                 z_dim=100, verbose=1, callbacks=[],
                 validation_data=None, nb_val_samples=None,
-                saver=None):
+                saver=None,sess=None, extras =None):
     """
     Main training loop.
     modified from Keras fit_generator
@@ -45,6 +47,10 @@ def train_model(name, g_train, d_train, sampler, generator, samples_per_epoch, n
     counter = 0
     out_labels = ['g_loss', 'd_loss', 'd_loss_fake', 'd_loss_legit', 'time']  # self.metrics_names
     callback_metrics = out_labels + ['val_' + n for n in out_labels]
+    G, D, E = extras
+    file_path = "./dataset/int_data"
+    imgs = prepare_data(file_path)
+
 
     # prepare callbacks
     history = cbks.History()
@@ -53,19 +59,21 @@ def train_model(name, g_train, d_train, sampler, generator, samples_per_epoch, n
         callbacks += [cbks.ProgbarLogger()]
     callbacks = cbks.CallbackList(callbacks)
 
-    callbacks._set_params({
-        'nb_epoch': nb_epoch,
-        'nb_sample': samples_per_epoch,
+    callbacks.set_params({
+        'epochs': nb_epoch,
+        'samples': samples_per_epoch,
         'verbose': verbose,
         'metrics': callback_metrics,
     })
     callbacks.on_train_begin()
 
     while epoch < nb_epoch:
+
       callbacks.on_epoch_begin(epoch)
       samples_seen = 0
       batch_index = 0
       while samples_seen < samples_per_epoch:
+
         z, x = next(generator)
         # build batch logs
         batch_logs = {}
@@ -87,7 +95,14 @@ def train_model(name, g_train, d_train, sampler, generator, samples_per_epoch, n
         counter += 1
 
         # save samples
+
         if batch_index % 100 == 0:
+          ##interplation
+          # z_inter = get_img_code(imgs, E)
+          img_inter = g_train(imgs, None, counter, mode = 'inter')
+          save_imgs(img_inter, '{}_{}'.format(epoch, batch_index), src_img=imgs)
+
+
           join_image = np.zeros_like(np.concatenate([samples[:64], xs[:64]], axis=0))
           for j, (i1, i2) in enumerate(zip(samples[:64], xs[:64])):
             join_image[j*2] = i1
@@ -122,6 +137,87 @@ def train_model(name, g_train, d_train, sampler, generator, samples_per_epoch, n
     # _stop.set()
     callbacks.on_train_end()
 
+def prepare_data(path):
+    file_list = glob.glob('{}/*.jpg'.format(path))
+    file_list.sort(key=lambda x: int(x.strip('.jpg').strip('dataset/int_data/')))
+    imgs = [cv2.resize(cv2.imread(i),(160,80)) for i in file_list]
+
+    #imgs = [plt.imread(i) for i in file_list]
+    imgs = np.asarray(imgs,np.float32)
+    print("imgs.shape===", imgs.shape)
+    imgs = imgs/127.5 -1.
+    return imgs
+
+
+def get_img_code(imgs, E):
+    batch_size = imgs.shape[0]
+    #print("batch_size=", batch_size)
+    #print("imgs.shape===", imgs.shape)
+    encode_out = E.predict(imgs,batch_size = batch_size)
+    shape = encode_out[0].shape
+
+    noise = np.random.normal(0., 1., shape)
+    codes = encode_out[0] + noise * encode_out[1]
+    z_inter = get_interpolation(codes, 8, shape[-1])
+
+
+    return z_inter
+def get_interpolation(codes,N, z_dim):
+    shape = codes.shape
+    code_a = codes[:int(shape[0]/2)]
+    code_a = np.reshape(code_a,[-1, 1, z_dim])
+    code_b = codes[int(shape[0]/2):]
+    code_b = np.reshape(code_b, [-1, 1, z_dim])
+    alpha = np.reshape(np.linspace(0., 1., N), [1, N, 1])
+    z_inter = alpha*code_a + (1 - alpha)*code_b
+    z_inter = np.reshape(z_inter , [-1 , z_dim])
+
+    return z_inter
+
+def gen_interp_img(epoch ,E,G,file_path ,output_path = None):
+    imgs = prepare_data(file_path)
+    z_inter = get_img_code(imgs, E)
+
+    decode_img = G.predict(z_inter)
+
+    save_imgs(decode_img, epoch)
+
+def save_imgs(decode_img , epoch,src_img=None):
+
+    size = decode_img.shape[0]
+    N = int(size/8 +2)
+    big_img = np.ones([80*8, 160*N, 3], np.float32)
+    img_list = [None]*8*N
+    # for i in range(len(img_list)):
+    #     row = i % (N)
+    #     col = i //(N)
+    #     assert i == row*N + col
+    #
+    #
+    #
+
+    for i in list(range(8)):
+        img_list[N * i ] = src_img[i+8]
+        img_list[N * i  + N - 1] = src_img[i ]
+
+
+    index = 0
+    for i in range(len(img_list)):
+        if img_list[i] is   None:
+            img_list[i] = decode_img[index][:]
+            index +=1
+
+
+    o_shape = [80,160]
+    for i in range(8):
+        for j in range(N):
+            addimg = img_list[i * N + j][:]
+            big_img[i * o_shape[0]:(i + 1) * o_shape[0], j * o_shape[1]:(j + 1) * o_shape[1]] = addimg
+
+    big_img = (big_img + 1.)*255./2.
+    big_img_rgb = cv2.cvtColor(big_img, cv2.COLOR_BGR2RGB)
+
+    cv2.imwrite('./int/{}.jpg'.format(epoch),big_img_rgb )
 
 if __name__ == "__main__":
   parser = argparse.ArgumentParser(description='Generative model trainer')
@@ -130,13 +226,13 @@ if __name__ == "__main__":
   parser.add_argument('--host', type=str, default="localhost", help='Data server ip address.')
   parser.add_argument('--port', type=int, default=5557, help='Port of server.')
   # parser.add_argument('--time', type=int, default=1, help='How many temporal frames in a single input.')
-  parser.add_argument('--batch', type=int, default=64, help='Batch size.')
-  parser.add_argument('--epoch', type=int, default=200, help='Number of epochs.')
+  parser.add_argument('--batch', type=int, default=16, help='Batch size.')
+  parser.add_argument('--epoch', type=int, default=5000, help='Number of epochs.')
   parser.add_argument('--gpu', type=int, default=0, help='Which gpu to use')
   parser.add_argument('--epochsize', type=int, default=10000, help='How many frames per epoch.')
   parser.add_argument('--loadweights', dest='loadweights', action='store_true', help='Start from checkpoint.')
   parser.set_defaults(skipvalidate=False)
-  parser.set_defaults(loadweights=False)
+  parser.set_defaults(loadweights=True)
   args = parser.parse_args()
 
   MODEL_NAME = args.model
@@ -154,16 +250,24 @@ if __name__ == "__main__":
       os.makedirs("./outputs/results_"+args.name)
   if not os.path.exists("./outputs/samples_"+args.name):
       os.makedirs("./outputs/samples_"+args.name)
+  #fix OOM
+  config = tf.ConfigProto()
+  config.gpu_options.allow_growth = True
 
-  with tf.Session() as sess:
-    g_train, d_train, sampler, saver, loader, extras = get_model(sess=sess, name=args.name, batch_size=args.batch, gpu=args.gpu)
+  with tf.Session(config=config) as sess:
+    g_train, d_train, sampler, saver, loader, extras = get_model(sess=sess, name=args.name, batch_size= None, gpu=args.gpu)
 
     # start from checkpoint
     if args.loadweights:
+      print('loading weight')
+      #sess.run(tf.global_variables_initializer())
       loader()
+    else:
+      sess.run(tf.global_variables_initializer())
 
-    train_model(args.name, g_train, d_train, sampler,
-                gen(20, args.host, port=args.port),
-                samples_per_epoch=args.epochsize,
-                nb_epoch=args.epoch, verbose=1, saver=saver
-                )
+
+    # train_model(args.name, g_train, d_train, sampler,
+    #             gen(20, args.host, port=args.port),
+    #             samples_per_epoch=args.epochsize,
+    #             nb_epoch=args.epoch, verbose=1, saver=saver,
+    #             sess=sess, extras = extras)

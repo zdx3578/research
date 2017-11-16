@@ -3,13 +3,14 @@ os.environ["KERAS_BACKEND"] = "tensorflow"
 import numpy as np
 import tensorflow as tf
 from keras.engine import Layer, InputSpec
-from keras import backend as K, regularizers, constraints, initializations, activations
-from keras.layers.recurrent import Recurrent, time_distributed_dense
-
+from keras import backend as K, regularizers, constraints, initializers, activations
+initializers
+from keras.layers.recurrent import Recurrent , _time_distributed_dense
+time_distributed_dense = _time_distributed_dense
 
 class Deconv2D(Layer):
     def __init__(self, nb_filter, nb_row, nb_col,
-                 init='glorot_uniform', activation='linear', weights=None,
+                 kernel_initializer='glorot_uniform', activation='linear', weights=None,
                  border_mode='valid', subsample=(1, 1), dim_ordering='tf',
                  W_regularizer=None, b_regularizer=None, activity_regularizer=None,
                  W_constraint=None, b_constraint=None, **kwargs):
@@ -19,7 +20,7 @@ class Deconv2D(Layer):
         self.nb_filter = nb_filter
         self.nb_row = nb_row
         self.nb_col = nb_col
-        self.init = initializations.get(init, dim_ordering=dim_ordering)
+        self.init = initializers.get(kernel_initializer)
         self.activation = activations.get(activation)
         assert border_mode in {'valid', 'same'}, 'border_mode must be in {valid, same}'
         self.border_mode = border_mode
@@ -47,8 +48,8 @@ class Deconv2D(Layer):
             self.W_shape = (self.nb_row, self.nb_col, self.nb_filter, stack_size)
         else:
             raise Exception('Invalid dim_ordering: ' + self.dim_ordering)
-        self.W = self.init(self.W_shape, name='{}/w'.format(self.name))
-        self.b = K.zeros((self.nb_filter,), name='{}/biases'.format(self.name))
+        self.W = self.init(self.W_shape)
+        self.b = K.zeros((self.nb_filter,))
         self.trainable_weights = [self.W, self.b]
         self.regularizers = []
 

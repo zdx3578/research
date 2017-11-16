@@ -49,12 +49,12 @@ def concatenate(camera_names, time_len):
     except IOError:
       import traceback
       traceback.print_exc()
-      print "failed to open", tword
+      print("failed to open", tword)
 
   angle = np.concatenate(angle, axis=0)
   speed = np.concatenate(speed, axis=0)
   filters = np.concatenate(filters, axis=0).ravel()
-  print "training on %d/%d examples" % (filters.shape[0], angle.shape[0])
+  print("training on %d/%d examples" % (filters.shape[0], angle.shape[0]))
   return c5x, angle, speed, filters, hdf5_camera
 
 
@@ -82,6 +82,17 @@ def datagen(filter_files, time_len=1, batch_size=256, ignore_goods=False):
   angle_batch = np.zeros((batch_size, time_len, 1), dtype='float32')
   speed_batch = np.zeros((batch_size, time_len, 1), dtype='float32')
 
+  def next_batch(num, data):
+    '''
+    Return a total of `num` random samples and labels.
+    '''
+    idx = np.arange(0, len(data))
+    np.random.shuffle(idx)
+    idx = idx[:num]
+    data_shuffle = [data[i] for i in idx]
+
+    return np.asarray(data_shuffle)
+
   while True:
     try:
       t = time.time()
@@ -106,7 +117,7 @@ def datagen(filter_files, time_len=1, batch_size=256, ignore_goods=False):
         # low quality loop
         for es, ee, x in c5x:
           if i >= es and i < ee:
-            X_batch[count] = x[i-es-time_len+1:i-es+1]
+            X_batch[count] = next_batch(time_len ,x)
             break
 
         angle_batch[count] = np.copy(angle[i-time_len+1:i+1])[:, None]
@@ -121,9 +132,9 @@ def datagen(filter_files, time_len=1, batch_size=256, ignore_goods=False):
       print("%5.2f ms" % ((time.time()-start)*1000.0))
 
       if first:
-        print "X", X_batch.shape
-        print "angle", angle_batch.shape
-        print "speed", speed_batch.shape
+        print("X", X_batch.shape)
+        print("angle", angle_batch.shape)
+        print("speed", speed_batch.shape)
         first = False
 
       yield (X_batch, angle_batch, speed_batch)
